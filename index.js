@@ -2,6 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const Shopify = require('shopify-api-node');
 const moment = require('moment-timezone');
+const jwt = require('jsonwebtoken')
 require('dotenv').config()
 const app = express();
 app.use(bodyParser.json());
@@ -13,7 +14,36 @@ const shopify = new Shopify({
 
 moment.tz.setDefault("America/Los_Angeles");
 
-app.post('/orders/time-range', async (req, res) => {
+const JWT_SECRET_KEY = process.env.SECRET_KEY;
+
+const verifyToken = (req, res, next) => {
+    const token = req.headers['authorization'];
+    if (!token) {
+        return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    jwt.verify(token, JWT_SECRET_KEY, (err, decoded) => {
+        if (err) {
+            return res.status(401).json({ error: 'Invalid token' });
+        }
+        req.user = decoded;
+        next();
+    });
+};
+
+app.post('/login', (req, res) => {
+    // Mock user authentication (replace with your actual authentication logic)
+    const { username, password } = req.body;
+    // Replace this check with your authentication logic
+    if (username === process.env.USERNAME && password === process.env.PASSWORD) {
+        const token = jwt.sign({ username }, JWT_SECRET_KEY, { expiresIn: '1h' });
+        res.json({ token });
+    } else {
+        res.status(401).json({ error: 'Invalid credentials' });
+    }
+});
+
+app.post('/orders/time-range',  verifyToken, async (req, res) => {
     try {
         const { range, customStart, customEnd } = req.body;
         let startDate, endDate;
