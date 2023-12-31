@@ -2,10 +2,12 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const Shopify = require('shopify-api-node');
 const moment = require('moment-timezone');
-const jwt = require('jsonwebtoken')
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
 require('dotenv').config()
 const app = express();
 app.use(bodyParser.json());
+app.use(cors());
 
 const shopify = new Shopify({
     shopName: process.env.Shop_Name,
