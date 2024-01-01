@@ -4,7 +4,10 @@ const Shopify = require('shopify-api-node');
 const moment = require('moment-timezone');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
-require('dotenv').config()
+const axios = require('axios');
+const _ = require('lodash');
+require('dotenv').config();
+
 const app = express();
 app.use(bodyParser.json());
 app.use(cors());
@@ -34,9 +37,7 @@ const verifyToken = (req, res, next) => {
 };
 
 app.post('/login', (req, res) => {
-    // Mock user authentication (replace with your actual authentication logic)
     const { username, password } = req.body;
-    // Replace this check with your authentication logic
     if (username === process.env.USERNAME && password === process.env.PASSWORD) {
         const token = jwt.sign({ username }, JWT_SECRET_KEY, { expiresIn: '1h' });
         res.json({ token });
@@ -45,13 +46,13 @@ app.post('/login', (req, res) => {
     }
 });
 
-app.post('/orders/time-range',  verifyToken, async (req, res) => {
+app.post('/orders/time-range', verifyToken, async (req, res) => {
     try {
         const { range, customStart, customEnd } = req.body;
         let startDate, endDate;
 
         const currentDate = moment().tz('America/Los_Angeles');
-        console.log("current", currentDate) // Current date in Los Angeles timezone
+
         if (range === 'week') {
             startDate = moment(currentDate).subtract(7, 'days').startOf('day').format('YYYY-MM-DDTHH:mm:ss-08:00');
             endDate = moment(currentDate).format('YYYY-MM-DDTHH:mm:ss-08:00');
@@ -64,83 +65,68 @@ app.post('/orders/time-range',  verifyToken, async (req, res) => {
         } else if (range === 'start') {
             startDate = moment(currentDate).startOf('week').format('YYYY-MM-DDTHH:mm:ss-08:00');
             endDate = moment(currentDate).format('YYYY-MM-DDTHH:mm:ss-08:00');
-        }else if (range === 'custom') {
-            // Custom start and end time from frontend
+        } else if (range === 'custom') {
             startDate = moment(customStart).format('YYYY-MM-DDTHH:mm:ss-08:00');
             endDate = moment(customEnd).format('YYYY-MM-DDTHH:mm:ss-08:00');
         } else {
             return res.status(400).json({ error: 'Invalid time range' });
         }
 
+        const formattedStartDate = startDate;
+        const formattedEndDate = endDate;
 
-        // Format dates in the way Shopify expects (ISO 8601 format)
+        const orders = await getAllOrdersInDateRange(formattedStartDate, formattedEndDate);
 
-        console.log("start", startDate)
-        console.log("ned", endDate)
-        const formattedStartDate = startDate
-        const formattedEndDate = endDate
+        const locationIdsToCount = [65769406517, 61394944053];
+        const locationIdCounts = _.zipObject(locationIdsToCount, Array(locationIdsToCount.length).fill(0));
+        const productDetails = {};
 
-        // Use formattedStartDate and formattedEndDate to filter orders
-        // Modify Shopify request to include the date range in the expected format
-        // Example:
-        let orders = [];
-        let params = {
-            created_at_min: formattedStartDate,
-            created_at_max: formattedEndDate,
-            status: 'closed',
-            fulfillment_status: 'shipped',
-            limit: 250,
-            fields: 'id,name,created_at,fulfillment_status,financial_status,fulfillments, current_subtotal_price'
-        };
-
-        do {
-            const ordersBatch = await shopify.order.list(params);
-            orders = orders.concat(ordersBatch);
-            params = ordersBatch.nextPageParameters;
-        } while (params !== undefined);
-
-
-
-        const locationIdsToCount = [65769406517, 61394944053]; // Add any other location IDs here
-
-        const locationIdCounts = {};
-        
-        // Initialize counts for each location ID
-        locationIdsToCount.forEach(id => {
-          locationIdCounts[id] = 0;
-        });
-        
-        // Loop through each order in the data
         orders.forEach(order => {
-          // Check if 'fulfillments' key exists in the order
-          if (order.fulfillments) {
-            // Loop through each fulfillment in the order
-            order.fulfillments.forEach(fulfillment => {
-              // Check if 'location_id' matches any of the specified values
-              if (locationIdsToCount.includes(fulfillment.location_id)) {
-                locationIdCounts[fulfillment.location_id]++;
-              }
-            });
-          }
+            if (order.fulfillments) {
+                order.fulfillments.forEach(fulfillment => {
+                    if (locationIdsToCount.includes(fulfillment.location_id)) {
+                        locationIdCounts[fulfillment.location_id]++;
+                    }
+
+                    fulfillment.line_items.forEach(item => {
+                        const locationID = fulfillment.location_id;
+
+                        if (!productDetails[locationID]) {
+                            productDetails[locationID] = {};
+                        }
+
+                        const { name: productName, grams, quantity } = item;
+
+                        if (!productDetails[locationID][productName]) {
+                            productDetails[locationID][productName] = {
+                                quantity: 0,
+                                totalGrams: 0
+                            };
+                        }
+
+                        productDetails[locationID][productName].quantity += quantity;
+                        productDetails[locationID][productName].totalGrams += grams;
+                    });
+                });
+            }
         });
-        
-        console.log(locationIdCounts)
-        
-        const totalCurrentSubtotal = orders.reduce((total, order) => {
-            // Ensure the current_subtotal_price key exists and is a valid number
+
+        const totalCurrentSubtotal = _.reduce(orders, (total, order) => {
             if (order && typeof order.current_subtotal_price === 'string') {
-              const subtotal = parseFloat(order.current_subtotal_price);
-              // Add the current subtotal to the total
-              total += subtotal;
+                const subtotal = parseFloat(order.current_subtotal_price);
+                total += subtotal;
             }
             return Math.floor(total);
-          }, 0);
+        }, 0);
 
+        const ordersWithLocationCounts = {
+            orders,
+            locationIdCounts,
+            totalCurrentSubtotal,
+            productDetails
+        };
 
-        const ordersWithLocationCounts = { ...orders, locationIdCounts, totalCurrentSubtotal };
-
-          
-        res.json({ order:ordersWithLocationCounts });
+        res.json({ order: ordersWithLocationCounts });
 
         console.log('Range:', range);
         console.log('Orders count:', orders.length);
@@ -150,6 +136,26 @@ app.post('/orders/time-range',  verifyToken, async (req, res) => {
         res.status(500).json({ error: 'Error fetching orders', details: error.message });
     }
 });
+
+const getAllOrdersInDateRange = async (startDate, endDate) => {
+    const orders = [];
+    let params = {
+        created_at_min: startDate,
+        created_at_max: endDate,
+        status: 'closed',
+        fulfillment_status: 'shipped',
+        limit: 250,
+        fields: 'id,name,created_at,fulfillment_status,financial_status,fulfillments,current_subtotal_price'
+    };
+
+    do {
+        const response = await shopify.order.list(params);
+        orders.push(...response);
+        params = response.nextPageParameters;
+    } while (params !== undefined);
+
+    return orders;
+};
 
 const PORT = 3001;
 app.listen(PORT, () => {
