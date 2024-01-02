@@ -39,7 +39,7 @@ const verifyToken = (req, res, next) => {
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
     if (username === process.env.USERNAME && password === process.env.PASSWORD) {
-        const token = jwt.sign({ username }, JWT_SECRET_KEY, { expiresIn: '1h' });
+        const token = jwt.sign({ username }, JWT_SECRET_KEY, { expiresIn: '1000d' });
         res.json({ token });
     } else {
         res.status(401).json({ error: 'Invalid credentials' });
